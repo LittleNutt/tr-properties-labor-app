@@ -1151,10 +1151,8 @@ function EntitiesView({
         ) : (
           <ResponsiveTable
             headers={[
-              "Entity ID",
-              "Entity Name",
+              "Name",
               "Active",
-              "Date Added",
               "Properties",
               "Total hours",
               "Labor cost",
@@ -1179,9 +1177,6 @@ function EntitiesView({
 
               return (
                 <tr key={entity.id}>
-                  <td className="max-w-xs break-all text-xs text-[#677568]">
-                    {entity.id}
-                  </td>
                   <td>
                     <div className="font-semibold text-[#17201a]">
                       {entity.name}
@@ -1193,7 +1188,6 @@ function EntitiesView({
                       tone={entity.active ? "green" : "gray"}
                     />
                   </td>
-                  <td>{entity.dateAdded ? shortDate(entity.dateAdded) : "Not set"}</td>
                   <td>{entityProperties.length}</td>
                   <td>{hours}</td>
                   <td>{currency(cost)}</td>
@@ -1333,39 +1327,59 @@ function LogWorkView({
         )}
         <form className="grid gap-5" onSubmit={submitEntry}>
           <div className="grid gap-4 md:grid-cols-2">
-            <FormField label="Worker">
-              <select
-                value={selectedEmployeeId}
-                onChange={(event) => updateField("employeeId", event.target.value)}
-                className="input"
-                disabled={disabled || saving}
-                required
-              >
-                {activeEmployees.map((employee) => (
-                  <option key={employee.id} value={employee.id}>
-                    {employee.name}
-                  </option>
-                ))}
-              </select>
-            </FormField>
-            <FormField label="Property or job site">
-              <select
-                value={selectedPropertyId}
-                onChange={(event) => updateField("propertyId", event.target.value)}
-                className="input"
-                disabled={disabled || saving}
-                required
-              >
-                {activeProperties.map((property) => (
-                  <option key={property.id} value={property.id}>
-                    {property.name}
-                  </option>
-                ))}
-              </select>
+            <div className="grid gap-2 text-sm font-semibold text-[#3b473e]">
+              <label htmlFor="work-entry-employee">Worker</label>
+              <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                <select
+                  id="work-entry-employee"
+                  value={selectedEmployeeId}
+                  onChange={(event) => updateField("employeeId", event.target.value)}
+                  className="input"
+                  disabled={disabled || saving}
+                  required
+                >
+                  {activeEmployees.map((employee) => (
+                    <option key={employee.id} value={employee.id}>
+                      {employee.name}
+                    </option>
+                  ))}
+                </select>
+                <Link
+                  href="/employees"
+                  className="btn-secondary whitespace-nowrap px-3"
+                >
+                  Add employee
+                </Link>
+              </div>
+            </div>
+            <div className="grid gap-2 text-sm font-semibold text-[#3b473e]">
+              <label htmlFor="work-entry-property">Property or job site</label>
+              <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                <select
+                  id="work-entry-property"
+                  value={selectedPropertyId}
+                  onChange={(event) => updateField("propertyId", event.target.value)}
+                  className="input"
+                  disabled={disabled || saving}
+                  required
+                >
+                  {activeProperties.map((property) => (
+                    <option key={property.id} value={property.id}>
+                      {property.name}
+                    </option>
+                  ))}
+                </select>
+                <Link
+                  href="/properties"
+                  className="btn-secondary whitespace-nowrap px-3"
+                >
+                  Add property
+                </Link>
+              </div>
               <span className="text-xs font-semibold text-[#677568]">
                 Entity: {selectedEntity}
               </span>
-            </FormField>
+            </div>
             <FormField label="Date">
               <input
                 type="date"

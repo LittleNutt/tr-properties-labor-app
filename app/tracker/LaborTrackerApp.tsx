@@ -471,6 +471,7 @@ export function LaborTrackerApp({
     const property = properties.find((item) => item.id === payload.propertyId);
     const result = await postAction<unknown>("addWorkEntry", {
       ...payload,
+      workPerformed: payload.description,
       entityId: property?.entityId ?? payload.entityId ?? "",
       entityName: property?.entityName ?? payload.entityName ?? "",
     });
@@ -490,6 +491,7 @@ export function LaborTrackerApp({
       id,
       entryId: id,
       ...payload,
+      workPerformed: payload.description,
       entityId:
         property?.entityId ?? payload.entityId,
       entityName:

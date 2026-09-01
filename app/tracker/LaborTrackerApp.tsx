@@ -302,45 +302,20 @@ export function LaborTrackerApp({
 
     try {
       setBackendError("");
-      const [
-        employeeResult,
-        entityResult,
-        propertyResult,
-        entryResult,
-        dashboardResult,
-      ] = await Promise.allSettled([
-        getAction<unknown>("getEmployees"),
-        getAction<unknown>("getEntities"),
-        getAction<unknown>("getProperties"),
-        getAction<unknown>("getWorkEntries"),
-        getAction<unknown>("getDashboard"),
-      ]);
-      const failures = [
-        ["employees", employeeResult],
-        ["entities", entityResult],
-        ["properties", propertyResult],
-        ["work entries", entryResult],
-        ["dashboard", dashboardResult],
-      ]
-        .filter(([, result]) => result.status === "rejected")
-        .map(
-          ([label, result]) =>
-            `${label}: ${
-              result.status === "rejected"
-                ? errorMessage(result.reason)
-                : "Unavailable"
-            }`,
-        );
-      const employeeData =
-        employeeResult.status === "fulfilled" ? employeeResult.value : null;
-      const entityData =
-        entityResult.status === "fulfilled" ? entityResult.value : null;
-      const propertyData =
-        propertyResult.status === "fulfilled" ? propertyResult.value : null;
-      const entryData =
-        entryResult.status === "fulfilled" ? entryResult.value : null;
-      const dashboardData =
-        dashboardResult.status === "fulfilled" ? dashboardResult.value : null;
+      const failures: string[] = [];
+      const loadAction = async (label: string, action: string) => {
+        try {
+          return await getAction<unknown>(action);
+        } catch (error) {
+          failures.push(`${label}: ${errorMessage(error)}`);
+          return null;
+        }
+      };
+      const employeeData = await loadAction("employees", "getEmployees");
+      const entityData = await loadAction("entities", "getEntities");
+      const propertyData = await loadAction("properties", "getProperties");
+      const entryData = await loadAction("work entries", "getWorkEntries");
+      const dashboardData = await loadAction("dashboard", "getDashboard");
 
       const nextEmployees = employeeData
         ? normalizeEmployees(employeeData)

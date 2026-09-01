@@ -28,7 +28,7 @@ const postActions = new Set([
   "uploadPhoto",
 ]);
 
-const APPS_SCRIPT_TIMEOUT_MS = 20000;
+const APPS_SCRIPT_TIMEOUT_MS = 45000;
 
 type ProxyPayload = {
   action?: string;

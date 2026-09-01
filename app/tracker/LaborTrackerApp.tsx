@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  AnchorHTMLAttributes,
   ChangeEvent,
   FormEvent,
   ReactNode,
@@ -8,7 +9,6 @@ import {
   useMemo,
   useState,
 } from "react";
-import Link from "next/link";
 import {
   DashboardStats,
   Employee,
@@ -90,6 +90,18 @@ const navItems: { view: View; href: string; label: string; symbol: string }[] = 
   },
   { view: "reports", href: "/reports", label: "Reports", symbol: "R" },
 ];
+
+function Link({
+  href,
+  children,
+  ...props
+}: AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) {
+  return (
+    <a href={href} {...props}>
+      {children}
+    </a>
+  );
+}
 
 const today = new Date().toISOString().slice(0, 10);
 
@@ -290,19 +302,50 @@ export function LaborTrackerApp({
 
     try {
       setBackendError("");
-      const [employeeData, entityData, propertyData, dashboardData] =
-        await Promise.all([
+      const [
+        employeeResult,
+        entityResult,
+        propertyResult,
+        entryResult,
+        dashboardResult,
+      ] = await Promise.allSettled([
         getAction<unknown>("getEmployees"),
-        getAction<unknown>("getEntities").catch((error) => ({
-          success: false,
-          error: errorMessage(error),
-          entities: [],
-        })),
+        getAction<unknown>("getEntities"),
         getAction<unknown>("getProperties"),
+        getAction<unknown>("getWorkEntries"),
         getAction<unknown>("getDashboard"),
       ]);
-      const nextEmployees = normalizeEmployees(employeeData);
-      const nextEntities = normalizeEntities(entityData);
+      const failures = [
+        ["employees", employeeResult],
+        ["entities", entityResult],
+        ["properties", propertyResult],
+        ["work entries", entryResult],
+        ["dashboard", dashboardResult],
+      ]
+        .filter(([, result]) => result.status === "rejected")
+        .map(
+          ([label, result]) =>
+            `${label}: ${
+              result.status === "rejected"
+                ? errorMessage(result.reason)
+                : "Unavailable"
+            }`,
+        );
+      const employeeData =
+        employeeResult.status === "fulfilled" ? employeeResult.value : null;
+      const entityData =
+        entityResult.status === "fulfilled" ? entityResult.value : null;
+      const propertyData =
+        propertyResult.status === "fulfilled" ? propertyResult.value : null;
+      const entryData =
+        entryResult.status === "fulfilled" ? entryResult.value : null;
+      const dashboardData =
+        dashboardResult.status === "fulfilled" ? dashboardResult.value : null;
+
+      const nextEmployees = employeeData
+        ? normalizeEmployees(employeeData)
+        : employees;
+      const nextEntities = entityData ? normalizeEntities(entityData) : entities;
       const entityRecord =
         entityData && typeof entityData === "object"
           ? (entityData as Record<string, unknown>)
@@ -316,20 +359,29 @@ export function LaborTrackerApp({
           ? `The backend responded, but did not return an Entities list. Deploy getEntities/addEntity/updateEntity/deleteEntity support before entity records can be saved. Backend message: ${backendMessage}`
           : "",
       );
-      const nextProperties = normalizeProperties(propertyData, nextEntities);
-      const entryData = await getAction<unknown>("getWorkEntries");
-      const nextEntries = normalizeWorkEntries(
-        entryData,
-        nextEmployees,
-        nextProperties,
-        nextEntities,
-      );
+      const nextProperties = propertyData
+        ? normalizeProperties(propertyData, nextEntities)
+        : properties;
+      const nextEntries = entryData
+        ? normalizeWorkEntries(
+            entryData,
+            nextEmployees,
+            nextProperties,
+            nextEntities,
+          )
+        : entries;
 
       setEmployees(nextEmployees);
       setEntities(nextEntities);
       setProperties(nextProperties);
       setEntries(nextEntries);
-      setDashboardStats(normalizeDashboard(dashboardData));
+      setDashboardStats(dashboardData ? normalizeDashboard(dashboardData) : {});
+
+      if (failures.length > 0) {
+        const message = `Some data could not load. ${failures.join(" ")}`;
+        setBackendError(message);
+        notify(message, "error");
+      }
     } catch (error) {
       const message = errorMessage(error);
       setBackendError(message);

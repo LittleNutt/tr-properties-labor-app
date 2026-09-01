@@ -63,6 +63,7 @@ export type WorkEntryPayload = {
 type RawRecord = Record<string, unknown>;
 
 const endpoint = "/api/google-apps-script";
+const REQUEST_TIMEOUT_MS = 25000;
 
 function isRecord(value: unknown): value is RawRecord {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -245,7 +246,26 @@ async function requestBackend<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
-  const response = await fetch(path, init);
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      cache: "no-store",
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("The backend took too long to respond. Please retry.");
+    }
+
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+
   const body = (await response.json().catch(() => null)) as
     | { ok?: boolean; data?: T; error?: string }
     | null;

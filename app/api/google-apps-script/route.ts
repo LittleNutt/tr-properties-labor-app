@@ -28,6 +28,8 @@ const postActions = new Set([
   "uploadPhoto",
 ]);
 
+const APPS_SCRIPT_TIMEOUT_MS = 20000;
+
 type ProxyPayload = {
   action?: string;
   payload?: Record<string, unknown>;
@@ -83,14 +85,34 @@ async function forwardToAppsScript(action: string, init?: RequestInit) {
   const url = new URL(backendUrl);
   url.searchParams.set("action", action);
 
-  const response = await fetch(url, {
-    redirect: "follow",
-    ...init,
-    headers: {
-      Accept: "application/json",
-      ...(init?.headers ?? {}),
-    },
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), APPS_SCRIPT_TIMEOUT_MS);
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      redirect: "follow",
+      cache: "no-store",
+      ...init,
+      signal: controller.signal,
+      headers: {
+        Accept: "application/json",
+        "Cache-Control": "no-cache",
+        ...(init?.headers ?? {}),
+      },
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(
+        "Google Apps Script took too long to respond. Please retry in a moment.",
+      );
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+
   const data = await parseAppsScriptResponse(response);
 
   if (!response.ok) {

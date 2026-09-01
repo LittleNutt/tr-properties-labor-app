@@ -1,5 +1,10 @@
 import { LaborTrackerApp } from "../tracker/LaborTrackerApp";
+import { requireInternalSession } from "../internal-auth";
 
-export default function EmployeesPage() {
+export const dynamic = "force-dynamic";
+
+export default async function EmployeesPage() {
+  await requireInternalSession("/employees");
+
   return <LaborTrackerApp initialView="employees" />;
 }

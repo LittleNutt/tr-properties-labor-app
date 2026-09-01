@@ -1,3 +1,5 @@
+import { hasInternalSessionFromRequest } from "../../internal-auth";
+
 const backendUrl =
   process.env.GOOGLE_APPS_SCRIPT_URL ??
   process.env.NEXT_PUBLIC_GOOGLE_APPS_SCRIPT_URL;
@@ -120,6 +122,10 @@ async function forwardToAppsScript(action: string, init?: RequestInit) {
 
 export async function GET(request: Request) {
   try {
+    if (!(await hasInternalSessionFromRequest(request))) {
+      return routeError("Please log in to access TR Properties data.", 401);
+    }
+
     const { searchParams } = new URL(request.url);
     const action = searchParams.get("action") ?? "";
 
@@ -137,6 +143,10 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    if (!(await hasInternalSessionFromRequest(request))) {
+      return routeError("Please log in to access TR Properties data.", 401);
+    }
+
     const body = (await request.json()) as ProxyPayload;
     const action = body.action ?? "";
 

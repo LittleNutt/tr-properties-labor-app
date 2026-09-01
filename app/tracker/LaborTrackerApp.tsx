@@ -754,10 +754,10 @@ function AppSidebar({ activeView }: { activeView: View }) {
             Workers do not have accounts. Management records activity manually.
           </p>
           <Link
-            href="/login"
+            href="/api/logout"
             className="mt-4 inline-flex rounded-md border border-white/15 px-3 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
           >
-            Login screen
+            Sign out
           </Link>
         </div>
       </div>
@@ -776,10 +776,10 @@ function MobileHeader({ activeView }: { activeView: View }) {
           <span className="font-semibold">Labor Tracker</span>
         </Link>
         <Link
-          href="/login"
+          href="/api/logout"
           className="rounded-md border border-white/15 px-3 py-2 text-sm font-semibold"
         >
-          Login
+          Sign out
         </Link>
       </div>
       <nav className="mt-3 flex gap-2 overflow-x-auto pb-1">
@@ -2875,13 +2875,40 @@ function LoginView({
   toasts: Toast[];
 }) {
   const [code, setCode] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
 
-  function submit(event: FormEvent<HTMLFormElement>) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    notify("Mock login accepted. Shared internal access only.");
-    window.setTimeout(() => {
-      window.location.href = "/";
-    }, 500);
+    setSaving(true);
+    setError("");
+
+    try {
+      const response = await fetch("/api/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ password: code }),
+      });
+      const body = (await response.json().catch(() => null)) as
+        | { ok?: boolean; error?: string }
+        | null;
+
+      if (!response.ok || body?.ok === false) {
+        throw new Error(body?.error ?? "Could not sign in.");
+      }
+
+      notify("Access granted.");
+      const params = new URLSearchParams(window.location.search);
+      const returnTo = params.get("returnTo") ?? "/";
+      window.location.href =
+        returnTo.startsWith("/") && !returnTo.startsWith("//") ? returnTo : "/";
+    } catch (loginError) {
+      setError(errorMessage(loginError));
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -2899,6 +2926,7 @@ function LoginView({
             not have accounts.
           </p>
         </div>
+        {error && <InlineError message={error} />}
         <form className="grid gap-4" onSubmit={submit}>
           <FormField label="Internal access code">
             <input
@@ -2906,12 +2934,13 @@ function LoginView({
               value={code}
               onChange={(event) => setCode(event.target.value)}
               className="input"
-              placeholder="Use any code for mock auth"
+              placeholder="Enter shared team password"
+              disabled={saving}
               required
             />
           </FormField>
-          <button type="submit" className="btn-primary">
-            Enter dashboard
+          <button type="submit" className="btn-primary" disabled={saving}>
+            {saving ? "Checking..." : "Enter dashboard"}
           </button>
         </form>
       </section>

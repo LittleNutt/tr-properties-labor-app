@@ -28,7 +28,26 @@ const postActions = new Set([
   "uploadPhoto",
 ]);
 
-const APPS_SCRIPT_TIMEOUT_MS = 45000;
+const APPS_SCRIPT_GET_TIMEOUT_MS = 12000;
+const APPS_SCRIPT_POST_TIMEOUT_MS = 60000;
+const APPS_SCRIPT_GET_CACHE_TTL_MS = 5 * 60 * 1000;
+const APPS_SCRIPT_GET_STALE_TTL_MS = 60 * 60 * 1000;
+const MAX_APPS_SCRIPT_REDIRECTS = 5;
+const BROWSER_LIKE_HEADERS = {
+  Accept: "application/json, text/plain, */*",
+  "Accept-Language": "en-US,en;q=0.9",
+  "Cache-Control": "no-cache",
+  "User-Agent":
+    "Mozilla/5.0 (compatible; TR-Properties-Labor-Tracker/1.0; +https://tr-properties-labor-tracker.tr-properties-labor.workers.dev)",
+};
+
+type CacheEntry = {
+  data: unknown;
+  savedAt: number;
+};
+
+const getCache = new Map<string, CacheEntry>();
+const edgeCachePrefix = "https://tr-properties-labor-tracker.internal/google-apps-script/";
 
 type ProxyPayload = {
   action?: string;
@@ -75,6 +94,124 @@ async function parseAppsScriptResponse(response: Response) {
   }
 }
 
+function mergeHeaders(headers?: HeadersInit) {
+  return {
+    ...BROWSER_LIKE_HEADERS,
+    ...(headers ?? {}),
+  };
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchAppsScript(
+  url: URL,
+  init: RequestInit,
+  timeoutMs: number,
+) {
+  let currentUrl = url.toString();
+  let currentInit = init;
+  const deadline = Date.now() + timeoutMs;
+
+  for (let redirectCount = 0; redirectCount <= MAX_APPS_SCRIPT_REDIRECTS; redirectCount += 1) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      throw new Error(
+        "Google Apps Script took too long to respond. Please retry in a moment.",
+      );
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), remainingMs);
+
+    try {
+      const response = await fetch(currentUrl, {
+        ...currentInit,
+        redirect: "manual",
+        cache: "no-store",
+        signal: controller.signal,
+        headers: mergeHeaders(currentInit.headers),
+      });
+
+      if (
+        response.status >= 300 &&
+        response.status < 400 &&
+        response.headers.has("location")
+      ) {
+        const location = response.headers.get("location") ?? "";
+        currentUrl = new URL(location, currentUrl).toString();
+        currentInit =
+          response.status === 307 || response.status === 308
+            ? currentInit
+            : {
+                method: "GET",
+                headers: currentInit.headers,
+              };
+        continue;
+      }
+
+      return response;
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new Error(
+          "Google Apps Script took too long to respond. Please retry in a moment.",
+        );
+      }
+
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  throw new Error("Google Apps Script redirected too many times.");
+}
+
+async function getEdgeCache(action: string) {
+  if (typeof caches === "undefined") {
+    return null;
+  }
+
+  const response = await caches.default.match(`${edgeCachePrefix}${action}`);
+  if (!response) {
+    return null;
+  }
+
+  return (await response.json().catch(() => null)) as CacheEntry | null;
+}
+
+async function setEdgeCache(action: string, entry: CacheEntry) {
+  if (typeof caches === "undefined") {
+    return;
+  }
+
+  await caches.default.put(
+    `${edgeCachePrefix}${action}`,
+    Response.json(entry, {
+      headers: {
+        "Cache-Control": `private, max-age=${Math.floor(
+          APPS_SCRIPT_GET_STALE_TTL_MS / 1000,
+        )}`,
+      },
+    }),
+  );
+}
+
+async function clearReadCaches() {
+  getCache.clear();
+
+  if (typeof caches === "undefined") {
+    return;
+  }
+
+  await Promise.all(
+    [...getActions].map((action) =>
+      caches.default.delete(`${edgeCachePrefix}${action}`),
+    ),
+  );
+}
+
 async function forwardToAppsScript(action: string, init?: RequestInit) {
   if (!backendUrl) {
     throw new Error(
@@ -84,62 +221,90 @@ async function forwardToAppsScript(action: string, init?: RequestInit) {
 
   const url = new URL(backendUrl);
   url.searchParams.set("action", action);
+  const method = init?.method?.toUpperCase() ?? "GET";
+  const isGet = method === "GET";
+  const memoryCached = getCache.get(action);
+  const edgeCached = isGet ? await getEdgeCache(action) : null;
+  const cached = memoryCached ?? edgeCached ?? undefined;
+  const now = Date.now();
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), APPS_SCRIPT_TIMEOUT_MS);
-
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      redirect: "follow",
-      cache: "no-store",
-      ...init,
-      signal: controller.signal,
-      headers: {
-        Accept: "application/json",
-        "Cache-Control": "no-cache",
-        ...(init?.headers ?? {}),
-      },
-    });
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new Error(
-        "Google Apps Script took too long to respond. Please retry in a moment.",
-      );
-    }
-
-    throw error;
-  } finally {
-    clearTimeout(timeout);
+  if (
+    isGet &&
+    cached &&
+    now - cached.savedAt < APPS_SCRIPT_GET_CACHE_TTL_MS
+  ) {
+    return cached.data;
   }
 
-  const data = await parseAppsScriptResponse(response);
+  const attempts = isGet ? 2 : 1;
+  const timeoutMs = isGet
+    ? APPS_SCRIPT_GET_TIMEOUT_MS
+    : APPS_SCRIPT_POST_TIMEOUT_MS;
+  let lastError: unknown;
 
-  if (!response.ok) {
-    const message =
-      data &&
-      typeof data === "object" &&
-      "error" in data &&
-      typeof data.error === "string"
-        ? data.error
-        : `Google Apps Script request failed with status ${response.status}.`;
-    throw new Error(message);
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetchAppsScript(
+        url,
+        {
+          method,
+          ...init,
+          headers: mergeHeaders(init?.headers),
+        },
+        timeoutMs,
+      );
+      const data = await parseAppsScriptResponse(response);
+
+      if (!response.ok) {
+        const message =
+          data &&
+          typeof data === "object" &&
+          "error" in data &&
+          typeof data.error === "string"
+            ? data.error
+            : `Google Apps Script request failed with status ${response.status}.`;
+        throw new Error(message);
+      }
+
+      if (
+        data &&
+        typeof data === "object" &&
+        "success" in data &&
+        data.success === false
+      ) {
+        const message =
+          "error" in data && typeof data.error === "string"
+            ? data.error
+            : "Google Apps Script reported an error.";
+        throw new Error(message);
+      }
+
+      if (isGet) {
+        const entry = { data, savedAt: Date.now() };
+        getCache.set(action, entry);
+        await setEdgeCache(action, entry);
+      }
+
+      return data;
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) {
+        await delay(800);
+      }
+    }
   }
 
   if (
-    data &&
-    typeof data === "object" &&
-    "success" in data &&
-    data.success === false
+    isGet &&
+    cached &&
+    now - cached.savedAt < APPS_SCRIPT_GET_STALE_TTL_MS
   ) {
-    const message =
-      "error" in data && typeof data.error === "string"
-        ? data.error
-        : "Google Apps Script reported an error.";
-    throw new Error(message);
+    return cached.data;
   }
 
-  return data;
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Google Apps Script request failed.");
 }
 
 export async function GET(request: Request) {
@@ -186,6 +351,8 @@ export async function POST(request: Request) {
         ...(body.payload ?? {}),
       }),
     });
+
+    await clearReadCaches();
 
     return Response.json({ ok: true, data });
   } catch (error) {

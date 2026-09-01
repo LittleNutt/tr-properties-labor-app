@@ -63,7 +63,7 @@ export type WorkEntryPayload = {
 type RawRecord = Record<string, unknown>;
 
 const endpoint = "/api/google-apps-script";
-const REQUEST_TIMEOUT_MS = 50000;
+const REQUEST_TIMEOUT_MS = 80000;
 
 function isRecord(value: unknown): value is RawRecord {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);

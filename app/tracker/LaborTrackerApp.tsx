@@ -302,20 +302,72 @@ export function LaborTrackerApp({
 
     try {
       setBackendError("");
-      const failures: string[] = [];
+      const failures: { action: string; message: string }[] = [];
       const loadAction = async (label: string, action: string) => {
         try {
           return await getAction<unknown>(action);
         } catch (error) {
-          failures.push(`${label}: ${errorMessage(error)}`);
+          failures.push({ action, message: `${label}: ${errorMessage(error)}` });
           return null;
         }
       };
-      const employeeData = await loadAction("employees", "getEmployees");
-      const entityData = await loadAction("entities", "getEntities");
-      const propertyData = await loadAction("properties", "getProperties");
-      const entryData = await loadAction("work entries", "getWorkEntries");
-      const dashboardData = await loadAction("dashboard", "getDashboard");
+      const shouldLoad = (view: View, action: string) => {
+        if (view === "dashboard") {
+          return [
+            "getDashboard",
+            "getEmployees",
+            "getEntities",
+            "getProperties",
+            "getWorkEntries",
+          ].includes(action);
+        }
+
+        if (view === "entities") {
+          return ["getEntities", "getProperties", "getWorkEntries", "getEmployees"].includes(action);
+        }
+
+        if (view === "employees") {
+          return ["getEmployees", "getWorkEntries"].includes(action);
+        }
+
+        if (view === "properties" || view === "property-detail") {
+          return ["getEntities", "getProperties", "getWorkEntries", "getEmployees"].includes(action);
+        }
+
+        if (view === "log-work") {
+          return ["getEntities", "getEmployees", "getProperties"].includes(action);
+        }
+
+        if (view === "work-entries" || view === "reports") {
+          return ["getEntities", "getEmployees", "getProperties", "getWorkEntries"].includes(action);
+        }
+
+        return false;
+      };
+
+      const [
+        employeeData,
+        entityData,
+        propertyData,
+        entryData,
+        dashboardData,
+      ] = await Promise.all([
+        shouldLoad(initialView, "getEmployees")
+          ? loadAction("employees", "getEmployees")
+          : Promise.resolve(null),
+        shouldLoad(initialView, "getEntities")
+          ? loadAction("entities", "getEntities")
+          : Promise.resolve(null),
+        shouldLoad(initialView, "getProperties")
+          ? loadAction("properties", "getProperties")
+          : Promise.resolve(null),
+        shouldLoad(initialView, "getWorkEntries")
+          ? loadAction("work entries", "getWorkEntries")
+          : Promise.resolve(null),
+        shouldLoad(initialView, "getDashboard")
+          ? loadAction("dashboard", "getDashboard")
+          : Promise.resolve(null),
+      ]);
 
       const nextEmployees = employeeData
         ? normalizeEmployees(employeeData)
@@ -352,8 +404,43 @@ export function LaborTrackerApp({
       setEntries(nextEntries);
       setDashboardStats(dashboardData ? normalizeDashboard(dashboardData) : {});
 
-      if (failures.length > 0) {
-        const message = `Some data could not load. ${failures.join(" ")}`;
+      const usefulDashboardData =
+        initialView !== "dashboard" ||
+        dashboardData ||
+        employeeData ||
+        entityData ||
+        propertyData ||
+        entryData;
+      const criticalActions =
+        initialView === "dashboard"
+          ? usefulDashboardData
+            ? []
+            : [
+                "getDashboard",
+                "getEmployees",
+                "getEntities",
+                "getProperties",
+                "getWorkEntries",
+              ]
+          : initialView === "entities"
+            ? ["getEntities"]
+            : initialView === "employees"
+              ? ["getEmployees"]
+              : initialView === "properties" || initialView === "property-detail"
+                ? ["getProperties"]
+                : initialView === "log-work"
+                  ? ["getEmployees", "getProperties"]
+                  : initialView === "work-entries" || initialView === "reports"
+                    ? ["getWorkEntries"]
+                    : [];
+      const criticalFailures = failures.filter((failure) =>
+        criticalActions.includes(failure.action),
+      );
+
+      if (criticalFailures.length > 0) {
+        const message = `Some data could not load. ${criticalFailures
+          .map((failure) => failure.message)
+          .join(" ")}`;
         setBackendError(message);
         notify(message, "error");
       }

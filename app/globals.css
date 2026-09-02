@@ -151,4 +151,12 @@ button:disabled {
   .table-action-danger:hover {
     background: #ffe4e0;
   }
+
+  @media (max-width: 767px) {
+    .table-action,
+    .table-action-danger {
+      min-height: 2.75rem;
+      padding-inline: 0.9rem;
+    }
+  }
 }

@@ -187,9 +187,32 @@ function asDate(value: unknown) {
   return new Date().toISOString().slice(0, 10);
 }
 
-function asPhotos(value: unknown) {
+function asPhotos(value: unknown): string[] {
   if (Array.isArray(value)) {
-    return value.map((item) => asString(item)).filter(Boolean);
+    return value.flatMap((item) => asPhotos(item));
+  }
+
+  if (isRecord(value)) {
+    const nestedUrl = pick(value, [
+      "url",
+      "URL",
+      "photoUrl",
+      "photoURL",
+      "photoLink",
+      "photoUrls",
+      "photoLinks",
+      "photos",
+      "fileUrl",
+      "fileURL",
+      "driveUrl",
+      "driveLink",
+      "viewUrl",
+      "viewURL",
+      "webViewLink",
+      "downloadUrl",
+    ]);
+
+    return nestedUrl === value ? [] : asPhotos(nestedUrl);
   }
 
   const text = asString(value);
@@ -199,8 +222,8 @@ function asPhotos(value: unknown) {
 
   try {
     const parsed = JSON.parse(text) as unknown;
-    if (Array.isArray(parsed)) {
-      return parsed.map((item) => asString(item)).filter(Boolean);
+    if (Array.isArray(parsed) || isRecord(parsed)) {
+      return asPhotos(parsed);
     }
   } catch {
     return text
@@ -279,8 +302,16 @@ async function requestBackend<T>(
   return body?.data as T;
 }
 
-export async function getAction<T>(action: string) {
-  return requestBackend<T>(`${endpoint}?action=${encodeURIComponent(action)}`, {
+export async function getAction<T>(
+  action: string,
+  options: { fresh?: boolean } = {},
+) {
+  const query = new URLSearchParams({ action });
+  if (options.fresh) {
+    query.set("fresh", "1");
+  }
+
+  return requestBackend<T>(`${endpoint}?${query.toString()}`, {
     method: "GET",
   });
 }
@@ -475,6 +506,14 @@ export function normalizeWorkEntries(
             "photoURLS",
             "photoUrl",
             "Photo URL",
+            "photoLinks",
+            "Photo Links",
+            "photoLink",
+            "Photo Link",
+            "imageUrls",
+            "Image URLs",
+            "imageLinks",
+            "Image Links",
           ]),
         ),
         laborCost: Number.isFinite(laborCost) ? laborCost : undefined,
@@ -592,20 +631,6 @@ export function deriveDashboard(
 }
 
 export function normalizeUploadPhotoResponse(value: unknown) {
-  const data = unwrapData(value, ["photo", "file", "upload"]);
-  if (!isRecord(data)) {
-    return asString(data);
-  }
-
-  return asString(
-    pick(data, [
-      "url",
-      "URL",
-      "photoUrl",
-      "photoURL",
-      "fileUrl",
-      "webViewLink",
-      "downloadUrl",
-    ]),
-  );
+  const data = unwrapData(value, ["photo", "file", "upload", "result"]);
+  return asPhotos(data)[0] ?? "";
 }

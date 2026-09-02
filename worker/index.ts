@@ -4,6 +4,7 @@ import handler from "vinext/server/app-router-entry";
 
 interface Env {
   ASSETS: Fetcher;
+  LABOR_CACHE?: KVNamespace;
   DB: D1Database;
   IMAGES: {
     input(stream: ReadableStream): {
@@ -17,6 +18,7 @@ interface Env {
 interface ExecutionContext {
   waitUntil(promise: Promise<unknown>): void;
   passThroughOnException(): void;
+  laborCache?: KVNamespace;
 }
 
 // Image security config. SVG sources with .svg extension auto-skip the
@@ -40,7 +42,13 @@ const worker = {
       }, allowedWidths);
     }
 
-    return handler.fetch(request, env, ctx);
+    const laborContext: ExecutionContext = {
+      waitUntil: (promise) => ctx.waitUntil(promise),
+      passThroughOnException: () => ctx.passThroughOnException(),
+      laborCache: env.LABOR_CACHE,
+    };
+
+    return handler.fetch(request, env, laborContext);
   },
 };
 

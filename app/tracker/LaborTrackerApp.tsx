@@ -7,6 +7,7 @@ import {
   ReactNode,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import {
@@ -118,6 +119,15 @@ function currency(value: number) {
     style: "currency",
     currency: "USD",
     maximumFractionDigits: 0,
+  }).format(value);
+}
+
+function hourlyRateCurrency(value: number) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 20,
   }).format(value);
 }
 
@@ -293,7 +303,9 @@ export function LaborTrackerApp({
     }, 3400);
   }
 
-  async function refreshData(options: { quiet?: boolean } = {}) {
+  async function refreshData(
+    options: { quiet?: boolean; forceFresh?: boolean } = {},
+  ) {
     if (options.quiet) {
       setRefreshing(true);
     } else {
@@ -305,7 +317,9 @@ export function LaborTrackerApp({
       const failures: { action: string; message: string }[] = [];
       const loadAction = async (label: string, action: string) => {
         try {
-          return await getAction<unknown>(action);
+          return await getAction<unknown>(action, {
+            fresh: options.forceFresh,
+          });
         } catch (error) {
           failures.push({ action, message: `${label}: ${errorMessage(error)}` });
           return null;
@@ -475,7 +489,7 @@ export function LaborTrackerApp({
       active: entity.active,
     });
     notify("Entity added.");
-    await refreshData({ quiet: true });
+    await refreshData({ quiet: true, forceFresh: true });
   }
 
   async function updateEntity(id: string, entity: EntityForm) {
@@ -487,7 +501,7 @@ export function LaborTrackerApp({
       active: entity.active,
     });
     notify("Entity updated.");
-    await refreshData({ quiet: true });
+    await refreshData({ quiet: true, forceFresh: true });
   }
 
   async function deleteEntity(entity: Entity) {
@@ -508,7 +522,7 @@ export function LaborTrackerApp({
       entityId: entity.id,
     });
     notify("Entity deleted.");
-    await refreshData({ quiet: true });
+    await refreshData({ quiet: true, forceFresh: true });
   }
 
   async function addEmployee(employee: EmployeeForm) {
@@ -518,7 +532,7 @@ export function LaborTrackerApp({
       active: employee.active,
     });
     notify("Employee added.");
-    await refreshData({ quiet: true });
+    await refreshData({ quiet: true, forceFresh: true });
   }
 
   async function updateEmployee(id: string, employee: EmployeeForm) {
@@ -530,7 +544,7 @@ export function LaborTrackerApp({
       active: employee.active,
     });
     notify("Employee updated.");
-    await refreshData({ quiet: true });
+    await refreshData({ quiet: true, forceFresh: true });
   }
 
   async function deleteEmployee(employee: Employee) {
@@ -539,7 +553,7 @@ export function LaborTrackerApp({
       employeeId: employee.id,
     });
     notify("Employee deleted.");
-    await refreshData({ quiet: true });
+    await refreshData({ quiet: true, forceFresh: true });
   }
 
   async function addProperty(property: PropertyForm) {
@@ -553,7 +567,7 @@ export function LaborTrackerApp({
       active: property.active,
     });
     notify("Property added.");
-    await refreshData({ quiet: true });
+    await refreshData({ quiet: true, forceFresh: true });
   }
 
   async function updateProperty(id: string, property: PropertyForm) {
@@ -569,7 +583,7 @@ export function LaborTrackerApp({
       active: property.active,
     });
     notify("Property updated.");
-    await refreshData({ quiet: true });
+    await refreshData({ quiet: true, forceFresh: true });
   }
 
   async function deleteProperty(property: PropertySite) {
@@ -578,13 +592,16 @@ export function LaborTrackerApp({
       propertyId: property.id,
     });
     notify("Property deleted.");
-    await refreshData({ quiet: true });
+    await refreshData({ quiet: true, forceFresh: true });
   }
 
   async function addWorkEntry(payload: WorkEntryPayload) {
     const property = properties.find((item) => item.id === payload.propertyId);
     const result = await postAction<unknown>("addWorkEntry", {
       ...payload,
+      photoLinks: payload.photos,
+      photoUrls: payload.photos,
+      "Photo Links": payload.photos,
       workPerformed: payload.description,
       entityId: property?.entityId ?? payload.entityId ?? "",
       entityName: property?.entityName ?? payload.entityName ?? "",
@@ -595,7 +612,7 @@ export function LaborTrackerApp({
         ? `Work entry saved. Labor cost: ${currency(savedEntry.laborCost)}.`
         : "Work entry saved.",
     );
-    await refreshData({ quiet: true });
+    await refreshData({ quiet: true, forceFresh: true });
     return savedEntry;
   }
 
@@ -605,6 +622,9 @@ export function LaborTrackerApp({
       id,
       entryId: id,
       ...payload,
+      photoLinks: payload.photos,
+      photoUrls: payload.photos,
+      "Photo Links": payload.photos,
       workPerformed: payload.description,
       entityId:
         property?.entityId ?? payload.entityId,
@@ -612,7 +632,7 @@ export function LaborTrackerApp({
         property?.entityName ?? payload.entityName,
     });
     notify("Work entry updated.");
-    await refreshData({ quiet: true });
+    await refreshData({ quiet: true, forceFresh: true });
   }
 
   async function deleteWorkEntry(entry: WorkEntry) {
@@ -621,7 +641,7 @@ export function LaborTrackerApp({
       entryId: entry.id,
     });
     notify("Work entry deleted.", "info");
-    await refreshData({ quiet: true });
+    await refreshData({ quiet: true, forceFresh: true });
   }
 
   async function uploadPhoto(file: File) {
@@ -652,7 +672,10 @@ export function LaborTrackerApp({
     return (
       <>
         {backendError && (
-          <ErrorBanner message={backendError} onRetry={() => void refreshData()} />
+          <ErrorBanner
+            message={backendError}
+            onRetry={() => void refreshData({ forceFresh: true })}
+          />
         )}
         {initialView === "dashboard" && (
           <DashboardView
@@ -729,6 +752,7 @@ export function LaborTrackerApp({
             entries={entries}
             updateWorkEntry={updateWorkEntry}
             deleteWorkEntry={deleteWorkEntry}
+            uploadPhoto={uploadPhoto}
             notify={notify}
             disabled={hasBackendIssue}
           />
@@ -799,7 +823,9 @@ export function LaborTrackerApp({
               <button
                 type="button"
                 className="btn-secondary"
-                onClick={() => void refreshData({ quiet: true })}
+                onClick={() =>
+                  void refreshData({ quiet: true, forceFresh: true })
+                }
                 disabled={refreshing || loading}
               >
                 Refresh
@@ -1534,7 +1560,7 @@ function LogWorkView({
                 Select multiple photos
               </span>
               <span className="mt-1 text-sm text-[#677568]">
-                JPG, PNG, HEIC placeholders are stored locally by filename only.
+                JPG, PNG, and HEIC files upload before the work entry is saved.
               </span>
               <input
                 type="file"
@@ -1626,6 +1652,8 @@ function EmployeesView({
   notify: (message: string, kind?: Toast["kind"]) => void;
   disabled: boolean;
 }) {
+  const editFormRef = useRef<HTMLDivElement>(null);
+  const hourlyRateInputRef = useRef<HTMLInputElement>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -1641,6 +1669,16 @@ function EmployeesView({
       name: employee.name,
       hourlyRate: String(employee.hourlyRate),
       active: employee.active,
+    });
+
+    hourlyRateInputRef.current?.focus();
+    window.requestAnimationFrame(() => {
+      if (window.matchMedia("(max-width: 1279px)").matches) {
+        editFormRef.current?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      }
     });
   }
 
@@ -1700,72 +1738,82 @@ function EmployeesView({
 
   return (
     <div className="grid gap-6 xl:grid-cols-[390px_1fr]">
-      <Panel title={editingId ? "Edit Employee" : "Add Employee"}>
-        {error && <InlineError message={error} />}
-        <form className="grid gap-4" onSubmit={submit}>
-          <FormField label="Employee name">
-            <input
-              value={form.name}
-              onChange={(event) =>
-                setForm((current) => ({ ...current, name: event.target.value }))
-              }
-              className="input"
-              placeholder="Full name"
-              disabled={disabled || saving}
-              required
-            />
-          </FormField>
-          <FormField label="Hourly rate">
-            <input
-              type="number"
-              min="1"
-              step="0.5"
-              value={form.hourlyRate}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  hourlyRate: event.target.value,
-                }))
-              }
-              className="input"
-              placeholder="32"
-              disabled={disabled || saving}
-              required
-            />
-          </FormField>
-          <label className="flex items-center justify-between rounded-lg border border-[#dfe7dc] bg-white px-3 py-3 text-sm font-semibold">
-            Active employee
-            <input
-              type="checkbox"
-              checked={form.active}
-              onChange={(event) =>
-                setForm((current) => ({ ...current, active: event.target.checked }))
-              }
-              className="h-5 w-5 accent-[#184b32]"
-              disabled={disabled || saving}
-            />
-          </label>
-          <div className="flex gap-2">
-            <button
-              type="submit"
-              className="btn-primary flex-1"
-              disabled={disabled || saving}
-            >
-              {saving ? "Saving..." : editingId ? "Save changes" : "Add employee"}
-            </button>
-            {editingId && (
+      <div ref={editFormRef} className="scroll-mt-24">
+        <Panel title={editingId ? "Edit Employee" : "Add Employee"}>
+          {error && <InlineError message={error} />}
+          <form className="grid gap-4" onSubmit={submit}>
+            <FormField label="Employee name">
+              <input
+                value={form.name}
+                onChange={(event) =>
+                  setForm((current) => ({ ...current, name: event.target.value }))
+                }
+                className="input"
+                placeholder="Full name"
+                disabled={disabled || saving}
+                required
+              />
+            </FormField>
+            <FormField label="Hourly rate">
+              <input
+                ref={hourlyRateInputRef}
+                type="number"
+                min="0.01"
+                step="any"
+                value={form.hourlyRate}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    hourlyRate: event.target.value,
+                  }))
+                }
+                className="input"
+                placeholder="32.50"
+                disabled={disabled || saving}
+                required
+              />
+            </FormField>
+            <label className="flex items-center justify-between rounded-lg border border-[#dfe7dc] bg-white px-3 py-3 text-sm font-semibold">
+              Active employee
+              <input
+                type="checkbox"
+                checked={form.active}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    active: event.target.checked,
+                  }))
+                }
+                className="h-5 w-5 accent-[#184b32]"
+                disabled={disabled || saving}
+              />
+            </label>
+            <div className="flex gap-2">
               <button
-                type="button"
-                className="btn-secondary"
-                onClick={reset}
-                disabled={saving}
+                type="submit"
+                className="btn-primary flex-1"
+                disabled={disabled || saving}
               >
-                Cancel
+                {saving
+                  ? "Saving..."
+                  : editingId
+                    ? "Save changes"
+                    : "Add employee"}
               </button>
-            )}
-          </div>
-        </form>
-      </Panel>
+              {editingId && (
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={reset}
+                  disabled={saving}
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+          </form>
+        </Panel>
+      </div>
       <Panel title="Employee Roster">
         {employees.length === 0 ? (
           <EmptyState
@@ -1804,7 +1852,7 @@ function EmployeesView({
                     tone={employee.active ? "green" : "gray"}
                   />
                 </td>
-                <td>{currency(employee.hourlyRate)}/hr</td>
+                <td>{hourlyRateCurrency(employee.hourlyRate)}/hr</td>
                 <td>{hours}</td>
                 <td>{currency(hours * employee.hourlyRate)}</td>
                 <td>
@@ -2236,6 +2284,7 @@ function WorkEntriesView({
   entries,
   updateWorkEntry,
   deleteWorkEntry,
+  uploadPhoto,
   notify,
   disabled,
 }: {
@@ -2245,6 +2294,7 @@ function WorkEntriesView({
   entries: WorkEntry[];
   updateWorkEntry: (id: string, entry: WorkEntryPayload) => Promise<void>;
   deleteWorkEntry: (entry: WorkEntry) => Promise<void>;
+  uploadPhoto: (file: File) => Promise<string>;
   notify: (message: string, kind?: Toast["kind"]) => void;
   disabled: boolean;
 }) {
@@ -2322,6 +2372,7 @@ function WorkEntriesView({
       const message = errorMessage(updateError);
       setError(message);
       notify(message, "error");
+      throw updateError;
     } finally {
       setSaving(false);
     }
@@ -2400,6 +2451,7 @@ function WorkEntriesView({
           entities={entities}
           employees={employees}
           properties={properties}
+          uploadPhoto={uploadPhoto}
           onCancel={() => setEditingId(null)}
           onSave={saveEdit}
           saving={saving}
@@ -2451,8 +2503,13 @@ function WorkEntriesView({
               <td>
                 <div className="flex flex-wrap gap-1.5">
                   {entry.photos.length > 0 ? (
-                    entry.photos.map((photo) => (
-                      <PhotoChip key={photo} label={photo} compact href={photo} />
+                    entry.photos.map((photo, index) => (
+                      <PhotoChip
+                        key={photo}
+                        label={`Photo ${index + 1}`}
+                        compact
+                        href={photo}
+                      />
                     ))
                   ) : (
                     <span className="text-sm text-[#7a857c]">None</span>
@@ -2494,6 +2551,7 @@ function EntryEditPanel({
   entities,
   employees,
   properties,
+  uploadPhoto,
   onCancel,
   onSave,
   saving,
@@ -2503,11 +2561,15 @@ function EntryEditPanel({
   entities: Entity[];
   employees: Employee[];
   properties: PropertySite[];
+  uploadPhoto: (file: File) => Promise<string>;
   onCancel: () => void;
   onSave: (id: string, entry: WorkEntryPayload) => Promise<void>;
   saving: boolean;
   disabled: boolean;
 }) {
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
   const [form, setForm] = useState<EntryForm>({
     employeeId: entry.employeeId,
     propertyId: entry.propertyId,
@@ -2525,18 +2587,35 @@ function EntryEditPanel({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    await onSave(entry.id, {
-      employeeId: form.employeeId,
-      propertyId: form.propertyId,
-      entityId: selectedProperty?.entityId ?? entry.entityId,
-      entityName: selectedProperty?.entityName ?? entry.entityName,
-      date: form.date,
-      hours: Number(form.hours),
-      description: form.description.trim(),
-      notes: form.notes.trim(),
-      photos: entry.photos,
-    });
+    setUploading(true);
+    setUploadError("");
+
+    try {
+      const uploadedPhotos: string[] = [];
+      for (const file of selectedFiles) {
+        uploadedPhotos.push(await uploadPhoto(file));
+      }
+
+      await onSave(entry.id, {
+        employeeId: form.employeeId,
+        propertyId: form.propertyId,
+        entityId: selectedProperty?.entityId ?? entry.entityId,
+        entityName: selectedProperty?.entityName ?? entry.entityName,
+        date: form.date,
+        hours: Number(form.hours),
+        description: form.description.trim(),
+        notes: form.notes.trim(),
+        photos: [...entry.photos, ...uploadedPhotos],
+      });
+      setSelectedFiles([]);
+    } catch (error) {
+      setUploadError(errorMessage(error));
+    } finally {
+      setUploading(false);
+    }
   }
+
+  const busy = saving || uploading;
 
   return (
     <Panel title="Edit Work Entry">
@@ -2547,7 +2626,7 @@ function EntryEditPanel({
             setForm((current) => ({ ...current, employeeId: event.target.value }))
           }
           className="input"
-          disabled={disabled || saving}
+          disabled={disabled || busy}
         >
           {employees.map((employee) => (
             <option key={employee.id} value={employee.id}>
@@ -2561,7 +2640,7 @@ function EntryEditPanel({
             setForm((current) => ({ ...current, propertyId: event.target.value }))
           }
           className="input"
-          disabled={disabled || saving}
+          disabled={disabled || busy}
         >
           {properties.map((property) => (
             <option key={property.id} value={property.id}>
@@ -2579,7 +2658,7 @@ function EntryEditPanel({
             setForm((current) => ({ ...current, date: event.target.value }))
           }
           className="input"
-          disabled={disabled || saving}
+          disabled={disabled || busy}
         />
         <input
           type="number"
@@ -2590,7 +2669,7 @@ function EntryEditPanel({
             setForm((current) => ({ ...current, hours: event.target.value }))
           }
           className="input"
-          disabled={disabled || saving}
+          disabled={disabled || busy}
         />
         <textarea
           value={form.description}
@@ -2598,7 +2677,7 @@ function EntryEditPanel({
             setForm((current) => ({ ...current, description: event.target.value }))
           }
           className="input min-h-24 resize-y lg:col-span-2"
-          disabled={disabled || saving}
+          disabled={disabled || busy}
         />
         <textarea
           value={form.notes}
@@ -2606,12 +2685,47 @@ function EntryEditPanel({
             setForm((current) => ({ ...current, notes: event.target.value }))
           }
           className="input min-h-24 resize-y lg:col-span-2"
-          disabled={disabled || saving}
+          disabled={disabled || busy}
         />
+        <div className="lg:col-span-4">
+          <div className="mb-2 text-sm font-semibold text-[#303b33]">Photos</div>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="btn-secondary cursor-pointer">
+              Add photos
+              <input
+                type="file"
+                multiple
+                accept="image/*"
+                onChange={(event) =>
+                  setSelectedFiles(Array.from(event.target.files ?? []))
+                }
+                className="sr-only"
+                disabled={disabled || busy}
+              />
+            </label>
+            {selectedFiles.map((file) => (
+              <PhotoChip
+                key={`${file.name}-${file.size}`}
+                label={file.name}
+                compact
+              />
+            ))}
+          </div>
+        </div>
+        {uploadError && (
+          <div className="lg:col-span-4">
+            <InlineError message={uploadError} />
+          </div>
+        )}
         {entry.photos.length > 0 && (
           <div className="flex flex-wrap gap-2 lg:col-span-4">
-            {entry.photos.map((photo) => (
-              <PhotoChip key={photo} label={photo} href={photo} compact />
+            {entry.photos.map((photo, index) => (
+              <PhotoChip
+                key={photo}
+                label={`Photo ${index + 1}`}
+                href={photo}
+                compact
+              />
             ))}
           </div>
         )}
@@ -2620,12 +2734,12 @@ function EntryEditPanel({
             type="button"
             className="btn-secondary"
             onClick={onCancel}
-            disabled={saving}
+            disabled={busy}
           >
             Cancel
           </button>
-          <button type="submit" className="btn-primary" disabled={disabled || saving}>
-            {saving ? "Saving..." : "Save entry"}
+          <button type="submit" className="btn-primary" disabled={disabled || busy}>
+            {uploading ? "Uploading..." : saving ? "Saving..." : "Save entry"}
           </button>
         </div>
       </form>
@@ -3230,8 +3344,13 @@ function EntryList({
               </p>
             </div>
             <div className="flex min-w-28 flex-wrap gap-1.5 md:justify-end">
-              {entry.photos.slice(0, 2).map((photo) => (
-                <PhotoChip key={photo} label={photo} compact href={photo} />
+              {entry.photos.slice(0, 2).map((photo, index) => (
+                <PhotoChip
+                  key={photo}
+                  label={`Photo ${index + 1}`}
+                  compact
+                  href={photo}
+                />
               ))}
               {entry.photos.length > 2 && (
                 <span className="rounded-md bg-[#f2f4f1] px-2 py-1 text-xs font-semibold text-[#677568]">

@@ -1,4 +1,5 @@
 import { hasInternalSessionFromRequest } from "../../internal-auth";
+import { getRequestExecutionContext } from "vinext/shims/request-context";
 
 const backendUrl =
   process.env.GOOGLE_APPS_SCRIPT_URL ??
@@ -28,10 +29,10 @@ const postActions = new Set([
   "uploadPhoto",
 ]);
 
-const APPS_SCRIPT_GET_TIMEOUT_MS = 12000;
+const APPS_SCRIPT_GET_TIMEOUT_MS = 45000;
 const APPS_SCRIPT_POST_TIMEOUT_MS = 60000;
 const APPS_SCRIPT_GET_CACHE_TTL_MS = 5 * 60 * 1000;
-const APPS_SCRIPT_GET_STALE_TTL_MS = 60 * 60 * 1000;
+const APPS_SCRIPT_GET_STALE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_APPS_SCRIPT_REDIRECTS = 5;
 const BROWSER_LIKE_HEADERS = {
   Accept: "application/json, text/plain, */*",
@@ -46,8 +47,22 @@ type CacheEntry = {
   savedAt: number;
 };
 
+type LaborCacheNamespace = {
+  get(
+    key: string,
+    options: { cacheTtl: number; type: "json" },
+  ): Promise<CacheEntry | null>;
+  put(key: string, value: string): Promise<void>;
+};
+
+type LaborExecutionContext = {
+  laborCache?: LaborCacheNamespace;
+  waitUntil(promise: Promise<unknown>): void;
+};
+
 const getCache = new Map<string, CacheEntry>();
 const edgeCachePrefix = "https://tr-properties-labor-tracker.internal/google-apps-script/";
+const kvCachePrefix = "google-apps-script:";
 
 type ProxyPayload = {
   action?: string;
@@ -101,8 +116,28 @@ function mergeHeaders(headers?: HeadersInit) {
   };
 }
 
-function delay(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function getLaborCache() {
+  const context = getRequestExecutionContext() as LaborExecutionContext | null;
+  return context?.laborCache;
+}
+
+function reportCacheError(operation: string, action: string, error: unknown) {
+  console.warn(
+    JSON.stringify({
+      event: "labor_cache_error",
+      operation,
+      action,
+      message: error instanceof Error ? error.message : String(error),
+    }),
+  );
+}
+
+function getDefaultCache() {
+  if (typeof caches === "undefined") {
+    return null;
+  }
+
+  return (caches as CacheStorage & { default?: Cache }).default ?? null;
 }
 
 async function fetchAppsScript(
@@ -169,50 +204,205 @@ async function fetchAppsScript(
 }
 
 async function getEdgeCache(action: string) {
-  if (typeof caches === "undefined") {
+  const cache = getDefaultCache();
+  if (!cache) {
     return null;
   }
 
-  const response = await caches.default.match(`${edgeCachePrefix}${action}`);
-  if (!response) {
+  try {
+    const response = await cache.match(`${edgeCachePrefix}${action}`);
+    if (!response) {
+      return null;
+    }
+
+    return (await response.json().catch(() => null)) as CacheEntry | null;
+  } catch (error) {
+    reportCacheError("edge_get", action, error);
+    return null;
+  }
+}
+
+async function getKvCache(action: string) {
+  const cache = getLaborCache();
+  if (!cache) {
     return null;
   }
 
-  return (await response.json().catch(() => null)) as CacheEntry | null;
+  try {
+    return await cache.get(`${kvCachePrefix}${action}`, {
+      cacheTtl: 30,
+      type: "json",
+    });
+  } catch (error) {
+    reportCacheError("get", action, error);
+    return null;
+  }
 }
 
 async function setEdgeCache(action: string, entry: CacheEntry) {
-  if (typeof caches === "undefined") {
+  const cache = getDefaultCache();
+  if (!cache) {
     return;
   }
 
-  await caches.default.put(
-    `${edgeCachePrefix}${action}`,
-    Response.json(entry, {
-      headers: {
-        "Cache-Control": `private, max-age=${Math.floor(
-          APPS_SCRIPT_GET_STALE_TTL_MS / 1000,
-        )}`,
-      },
+  try {
+    await cache.put(
+      `${edgeCachePrefix}${action}`,
+      Response.json(entry, {
+        headers: {
+          "Cache-Control": `public, max-age=${Math.floor(
+            APPS_SCRIPT_GET_STALE_TTL_MS / 1000,
+          )}`,
+        },
+      }),
+    );
+  } catch (error) {
+    reportCacheError("edge_put", action, error);
+  }
+}
+
+async function setKvCache(action: string, entry: CacheEntry) {
+  const cache = getLaborCache();
+  if (!cache) {
+    return;
+  }
+
+  try {
+    await cache.put(`${kvCachePrefix}${action}`, JSON.stringify(entry));
+  } catch (error) {
+    reportCacheError("put", action, error);
+  }
+}
+
+async function setReadCache(action: string, entry: CacheEntry) {
+  getCache.set(action, entry);
+  await Promise.all([setEdgeCache(action, entry), setKvCache(action, entry)]);
+}
+
+async function getReadCache(action: string) {
+  const memoryCached = getCache.get(action);
+  const [edgeCached, kvCached] = await Promise.all([
+    getEdgeCache(action),
+    getKvCache(action),
+  ]);
+  const cached = [memoryCached, edgeCached, kvCached]
+    .filter((entry): entry is CacheEntry => Boolean(entry))
+    .sort((left, right) => right.savedAt - left.savedAt)[0];
+
+  if (cached) {
+    getCache.set(action, cached);
+  }
+
+  return cached;
+}
+
+async function markReadCachesStale() {
+  const cacheEntries = await Promise.all(
+    [...getActions].map(async (action) => ({
+      action,
+      entry: await getReadCache(action),
+    })),
+  );
+
+  await Promise.all(
+    cacheEntries.map(async ({ action, entry }) => {
+      if (entry) {
+        const staleEntry = {
+          ...entry,
+          savedAt: Date.now() - APPS_SCRIPT_GET_CACHE_TTL_MS - 1,
+        };
+        getCache.set(action, staleEntry);
+        await setKvCache(action, staleEntry);
+      } else {
+        getCache.delete(action);
+      }
+
+      const cache = getDefaultCache();
+      if (cache) {
+        try {
+          await cache.delete(`${edgeCachePrefix}${action}`);
+        } catch (error) {
+          reportCacheError("edge_delete", action, error);
+        }
+      }
     }),
   );
 }
 
-async function clearReadCaches() {
-  getCache.clear();
+async function fetchLiveData(
+  action: string,
+  url: URL,
+  method: string,
+  init: RequestInit | undefined,
+) {
+  const isGet = method === "GET";
+  const response = await fetchAppsScript(
+    url,
+    {
+      method,
+      ...init,
+      headers: mergeHeaders(init?.headers),
+    },
+    isGet ? APPS_SCRIPT_GET_TIMEOUT_MS : APPS_SCRIPT_POST_TIMEOUT_MS,
+  );
+  const data = await parseAppsScriptResponse(response);
 
-  if (typeof caches === "undefined") {
-    return;
+  if (!response.ok) {
+    const message =
+      data &&
+      typeof data === "object" &&
+      "error" in data &&
+      typeof data.error === "string"
+        ? data.error
+        : `Google Apps Script request failed with status ${response.status}.`;
+    throw new Error(message);
   }
 
-  await Promise.all(
-    [...getActions].map((action) =>
-      caches.default.delete(`${edgeCachePrefix}${action}`),
-    ),
-  );
+  if (
+    data &&
+    typeof data === "object" &&
+    "success" in data &&
+    data.success === false
+  ) {
+    const message =
+      "error" in data && typeof data.error === "string"
+        ? data.error
+        : "Google Apps Script reported an error.";
+    throw new Error(message);
+  }
+
+  if (isGet) {
+    await setReadCache(action, { data, savedAt: Date.now() });
+  }
+
+  return data;
 }
 
-async function forwardToAppsScript(action: string, init?: RequestInit) {
+function refreshInBackground(refresh: Promise<unknown>, action: string) {
+  const guardedRefresh = refresh.catch((error) => {
+    console.warn(
+      JSON.stringify({
+        event: "google_apps_script_background_refresh_failed",
+        action,
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
+  });
+  const context = getRequestExecutionContext();
+
+  if (context) {
+    context.waitUntil(guardedRefresh);
+    return true;
+  }
+
+  return false;
+}
+
+async function forwardToAppsScript(
+  action: string,
+  init?: RequestInit,
+  options: { forceRefresh?: boolean } = {},
+) {
   if (!backendUrl) {
     throw new Error(
       "Missing GOOGLE_APPS_SCRIPT_URL or NEXT_PUBLIC_GOOGLE_APPS_SCRIPT_URL.",
@@ -223,88 +413,44 @@ async function forwardToAppsScript(action: string, init?: RequestInit) {
   url.searchParams.set("action", action);
   const method = init?.method?.toUpperCase() ?? "GET";
   const isGet = method === "GET";
-  const memoryCached = getCache.get(action);
-  const edgeCached = isGet ? await getEdgeCache(action) : null;
-  const cached = memoryCached ?? edgeCached ?? undefined;
+  const cached = isGet ? await getReadCache(action) : undefined;
   const now = Date.now();
 
   if (
     isGet &&
     cached &&
+    !options.forceRefresh &&
     now - cached.savedAt < APPS_SCRIPT_GET_CACHE_TTL_MS
   ) {
     return cached.data;
   }
 
-  const attempts = isGet ? 2 : 1;
-  const timeoutMs = isGet
-    ? APPS_SCRIPT_GET_TIMEOUT_MS
-    : APPS_SCRIPT_POST_TIMEOUT_MS;
-  let lastError: unknown;
+  const liveRequest = fetchLiveData(action, url, method, init);
+  if (isGet && cached && !options.forceRefresh) {
+    if (refreshInBackground(liveRequest, action)) {
+      return cached.data;
+    }
 
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      const response = await fetchAppsScript(
-        url,
-        {
-          method,
-          ...init,
-          headers: mergeHeaders(init?.headers),
-        },
-        timeoutMs,
-      );
-      const data = await parseAppsScriptResponse(response);
-
-      if (!response.ok) {
-        const message =
-          data &&
-          typeof data === "object" &&
-          "error" in data &&
-          typeof data.error === "string"
-            ? data.error
-            : `Google Apps Script request failed with status ${response.status}.`;
-        throw new Error(message);
-      }
-
-      if (
-        data &&
-        typeof data === "object" &&
-        "success" in data &&
-        data.success === false
-      ) {
-        const message =
-          "error" in data && typeof data.error === "string"
-            ? data.error
-            : "Google Apps Script reported an error.";
-        throw new Error(message);
-      }
-
-      if (isGet) {
-        const entry = { data, savedAt: Date.now() };
-        getCache.set(action, entry);
-        await setEdgeCache(action, entry);
-      }
-
-      return data;
-    } catch (error) {
-      lastError = error;
-      if (attempt < attempts) {
-        await delay(800);
-      }
+      return await liveRequest;
+    } catch {
+      return cached.data;
     }
   }
 
-  if (
-    isGet &&
-    cached &&
-    now - cached.savedAt < APPS_SCRIPT_GET_STALE_TTL_MS
-  ) {
-    return cached.data;
-  }
+  try {
+    return await liveRequest;
+  } catch (error) {
+    if (
+      isGet &&
+      cached &&
+      now - cached.savedAt < APPS_SCRIPT_GET_STALE_TTL_MS
+    ) {
+      return cached.data;
+    }
 
-  throw lastError instanceof Error
-    ? lastError
-    : new Error("Google Apps Script request failed.");
+    throw error;
+  }
 }
 
 export async function GET(request: Request) {
@@ -320,7 +466,11 @@ export async function GET(request: Request) {
       return routeError("Unsupported GET action.", 400);
     }
 
-    const data = await forwardToAppsScript(action, { method: "GET" });
+    const data = await forwardToAppsScript(
+      action,
+      { method: "GET" },
+      { forceRefresh: searchParams.get("fresh") === "1" },
+    );
     return Response.json({ ok: true, data });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected error";
@@ -352,7 +502,7 @@ export async function POST(request: Request) {
       }),
     });
 
-    await clearReadCaches();
+    await markReadCachesStale();
 
     return Response.json({ ok: true, data });
   } catch (error) {
